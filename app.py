@@ -325,7 +325,7 @@ def load_drive_files(url):
             url=url,
             output=str(output_file),
             quiet=True,
-            fuzzy=True,
+            
         )
 
         if downloaded:
