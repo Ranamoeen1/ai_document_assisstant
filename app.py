@@ -306,13 +306,15 @@ def load_drive_files(url):
     """
     Download a public Google Drive file or folder.
 
-    The Drive item must be shared as "Anyone with the link".
+    The Drive item must be shared as:
+    Anyone with the link -> Viewer
     """
     temp_dir = Path(tempfile.mkdtemp(prefix="drive_docs_"))
 
-    is_folder = "/folders/" in url
-
-    if is_folder:
+    # -----------------------------
+    # Google Drive folder
+    # -----------------------------
+    if "/folders/" in url:
         gdown.download_folder(
             url=url,
             output=str(temp_dir),
@@ -323,17 +325,22 @@ def load_drive_files(url):
         files = []
 
         for path in temp_dir.rglob("*"):
-            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
+            if (
+                path.is_file()
+                and path.suffix.lower() in SUPPORTED_EXTENSIONS
+            ):
                 files.append(path)
 
         return files
 
-    # Single Google Drive file
-    output_file = temp_dir / "drive_file"
+    # -----------------------------
+    # Google Drive single file
+    # -----------------------------
 
+    # Try to download using gdown.
     downloaded = gdown.download(
         url=url,
-        output=str(output_file),
+        output=str(temp_dir),
         quiet=True,
     )
 
@@ -342,7 +349,11 @@ def load_drive_files(url):
 
     downloaded_path = Path(downloaded)
 
-    # Try to determine the original extension from the URL.
+    # If gdown already preserved the extension, use it.
+    if downloaded_path.suffix.lower() in SUPPORTED_EXTENSIONS:
+        return [downloaded_path]
+
+    # If the URL contains a filename/extension, use it.
     url_without_query = url.split("?")[0]
     url_extension = Path(url_without_query).suffix.lower()
 
@@ -351,12 +362,53 @@ def load_drive_files(url):
         downloaded_path.rename(new_path)
         return [new_path]
 
-    # Check whether gdown created a file with a supported extension.
-    if downloaded_path.suffix.lower() in SUPPORTED_EXTENSIONS:
-        return [downloaded_path]
+    # -----------------------------------------
+    # Detect file type from the downloaded file
+    # -----------------------------------------
+
+    with open(downloaded_path, "rb") as file:
+        header = file.read(16)
+
+    # PDF starts with %PDF
+    if header.startswith(b"%PDF"):
+        new_path = downloaded_path.with_suffix(".pdf")
+        downloaded_path.rename(new_path)
+        return [new_path]
+
+    # DOCX is a ZIP file.
+    # Check whether the ZIP contains Word files.
+    if header.startswith(b"PK"):
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(downloaded_path, "r") as zip_file:
+                names = zip_file.namelist()
+
+                if "word/document.xml" in names:
+                    new_path = downloaded_path.with_suffix(".docx")
+                    downloaded_path.rename(new_path)
+                    return [new_path]
+        except zipfile.BadZipFile:
+            pass
+
+    # Plain text / Markdown
+    try:
+        text = downloaded_path.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+
+        if text.strip():
+            # Google Drive cannot reliably tell us TXT vs MD.
+            # Treat it as Markdown because Markdown is also plain text.
+            new_path = downloaded_path.with_suffix(".md")
+            downloaded_path.rename(new_path)
+            return [new_path]
+
+    except Exception:
+        pass
 
     return []
-
 # -----------------------------
 # Processing pipeline
 # -----------------------------
